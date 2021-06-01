@@ -1,0 +1,203 @@
+#!/usr/bin/env node
+
+// this version caused node to crash with an out of memory errors
+// on the PugetSound 30m dataset.
+const fs = require("fs");
+const readline = require("readline");
+const path = require("path");
+
+function usage(nm, msg="")
+{
+    console.log(`${msg}
+usage: ${nm} DEMFILE [-subset colmin rowmin colmax rowmax] [-info]
+ (output is DEMFILE.obj)
+    `);
+    process.exit(1);
+}
+
+main();
+
+async function main()
+{
+    let appnm = path.basename(process.argv[1]); // 0 is node
+    let subset = null;
+    let demfile = null;
+    let headeronly = false;
+    for(let i=2;i<process.argv.length;i++)
+    {
+        let a = process.argv[i];
+        switch(a)
+        {
+        case "-subset":
+        case "-s":
+            if((i + 4) < process.argv.length)
+            {
+                subset = [Number(process.argv[i+1]),
+                          Number(process.argv[i+2]),
+                          Number(process.argv[i+3]),
+                          Number(process.argv[i+4])];
+                if(subset[0] >= subset[2] || subset[1] >= subset[3])
+                {
+                    usage(appnm, "Invalid subset");
+                }
+                i += 4;
+            }
+            else
+                usage(appnm);
+            break;
+        case "-info":
+        case "-i":
+            headeronly = true;
+            break;
+        default:
+            if(demfile == null)
+                demfile = a;
+            else
+                usage(appnm); // exits
+            break;
+        }
+    }
+
+    if(!demfile)
+        usage(appnm);
+
+    await convertToOBJ(headeronly, subset, demfile, demfile+".obj");
+}
+
+function createOBJFile(ofile, header)
+{
+    let ostream;
+    ostream = fs.createWriteStream(ofile);
+    ostream.write("# DEMtoOBJ \n");
+    // other comments here
+    ostream.write(`# ncols: ${header.ncols}\n`);
+    ostream.write(`# nrows: ${header.nrows}\n`);
+    ostream.write(`# cellsize: ${header.cellsize}\n`);
+    ostream.write(`# xllcorner: ${header.xllcorner}\n`);
+    ostream.write(`# yllcorner: ${header.yllcorner}\n`);
+    ostream.write(`# subset: ${header.subset}\n`);
+    return ostream;
+}
+
+
+// OBJ file 
+// https://en.wikipedia.org/wiki/Wavefront_.obj_file
+// 
+// v: vertex
+// vt: texture coords
+// vn: vertex normals
+// faces require vertex _indices_
+// f: v1 v2 v3
+// or:  v1/vt1 v2/vt2 v3/vt3
+// or:  v1//vn1 v2//vn2 v3//vn3
+// or:  v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3
+async function convertToOBJ(headeronly, subset, ifile, ofile)
+{
+    // https://nodejs.org/api/readline.html#readline_example_read_file_stream_line_by_line
+    const rl = readline.createInterface(
+    {
+        input: fs.createReadStream(ifile),
+        crlfDelay: Infinity,
+    });
+    rl.on("close", () =>
+    {
+        console.log("done reading from " + ifile);
+    });
+
+    let linenum = 1, row = 0;
+    let header = {};
+    let ostream;
+    // nrows 7600
+    // ncols 6740
+    // row:7599 columns:6741
+    let maxx;
+    let y = 0; // rows
+    for await (const line of rl) 
+    {
+        if(linenum > 6)
+        {
+            // write all the vertices
+            // x, y are row and column scaled by cellsize
+            // 
+            // z is the elevation value (potentially scaled)
+            if(row == 0) 
+            {
+                ostream = createOBJFile(ofile, header);
+                // console.log(`row:${row} columns:${columns.length}`);
+                // console.log("head", columns.slice(0, 5));
+                // console.log("tail", columns.slice(-5));
+            }
+            let columns = line.split(/\s+/); // columns has one extra value
+            x = 0;
+            if(row % 100 == 0)
+                console.log(`Row ${row} / ${header.nrows}`);
+            for(let c = 0; c < (columns.length-1); c++)
+            {
+                let z = Number(columns[c]);
+                console.assert(!isNaN(z));
+                ostream.write(`v ${x} ${y} ${z}\n`);
+                x += header.cellsize;
+            }
+            row++;
+            y += header.cellsize;
+        }
+        else
+        {
+            // read one line of the header.
+            let fields = line.split(/\s+/);
+            header[fields[0]] = parseFloat(fields[1]);
+            if(linenum == 6) 
+            {
+                console.log(JSON.stringify(header, null, 2));
+                maxx = header.ncols * header.cellsize;
+                if(headeronly)
+                    break;
+            }
+        }
+        linenum++;
+    }
+    if(headeronly)
+        process.exit(0);
+
+    console.log("Writing out faces here"); // OBJ: index origin is 1
+
+    // two triangles per cell, alternating
+    // v1  v2  v3
+    // |\  |  /|   top
+    // | \ | / |
+    // |  \|/  |   bottom
+    // v4  v5  v6
+    // +===+===+
+    // |\  |  /|   top
+    // | \ | / |
+    // |  \|/  |   bottom
+    // v7  v8  v9
+
+    // f 1 5 4, f 1 2 5, f 2 3 5, f 3 6 5
+    // f 4 8 7, f 4 5 8, f 5 6 8, f 6 9 8
+    let topV=1;
+    let bottomV;
+    for(row=0; row < header.nrows-1; row++)
+    {
+        topV = row * header.ncols + 1;
+        bottomV = topV + header.ncols;
+        let even = true;
+        for(let c=0; c<header.ncols-1; c++)
+        {
+            if(even)
+            {
+                ostream.write(`f ${topV} ${bottomV+1} ${bottomV}\n`);
+                ostream.write(`f ${topV} ${topV+1} ${bottomV+1}\n`);
+            }
+            else
+            {
+                ostream.write(`f ${topV} ${topV+1} ${bottomV}\n`);
+                ostream.write(`f ${topV+1} ${bottomV+1} ${bottomV}\n`);
+            }
+            even = !even;
+            topV++;
+            bottomV++;
+        }
+    }
+
+}
