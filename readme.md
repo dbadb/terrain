@@ -1,12 +1,15 @@
-http://gis.ess.washington.edu/data/
-https://www.ocean.washington.edu/data/pugetsound/datasets/psdem2000/rasters/complete/psdem_2000.zip
-http://gis.ess.washington.edu/data/raster/thirtymeter/wabil30/index.html
-http://pugetsoundlidar.org/
-http://pugetsoundlidar.ess.washington.edu/lidardata/restricted/be_dem/be_hsd_qq_spn/index.html
+# Terrain
 
-Input file has
-ncols: 6740
-nrows: 7600
+A small repo for converting DEM (digital elevation maps) to OBJ files for CNC routing.
+
+see also:
+  http://gis.ess.washington.edu/data/
+  https://www.ocean.washington.edu/data/pugetsound/datasets/psdem2000/rasters/complete/psdem_2000.zip
+  http://gis.ess.washington.edu/data/raster/thirtymeter/wabil30/index.html
+  http://pugetsoundlidar.org/
+  http://pugetsoundlidar.ess.washington.edu/lidardata/restricted/be_dem/be_hsd_qq_spn/index.html
+
+PugetSound.dem ncols: 6740, nrows: 7600
 
 ```bash
 ./DEMtoOBJ.py PugetSound.dem -subset 0 0 999 999 -zscale .1 -o section00.obj
